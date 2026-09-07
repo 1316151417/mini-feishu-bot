@@ -72,7 +72,7 @@ write_result ──> 创建飞书文档报告，回复链接
 
 ## 新增一个 workflow
 
-`workflows/` 下建同名包，实现写在包内 `workflow.py`（`build(ctx)` + `@register("your_key")`），`__init__.py` 只转发 `build`，并把包导入加到 `workflows/__init__.py` 底部。提示词/状态/图逻辑分文件放（参考 `dev_review/`）；投递由 `main.py` 适配层统一处理，workflow 不感知飞书。
+`workflows/` 下建同名目录（命名空间包，无需 `__init__.py`），实现写在 `workflow.py`（`build(ctx)` + `@register("your_key")`），并把导入加到 `workflows/registry.py` 底部。提示词/状态/图逻辑分文件放（参考 `dev_review/`）；投递由 `main.py` 适配层统一处理，workflow 不感知飞书。
 
 ## 配置
 
@@ -113,11 +113,11 @@ WantedBy=multi-user.target
 
 ```
 main.py                  飞书收发 + 结果投递（文本 / 报告链接 / 受理表情）
-workflows/
-  __init__.py            只转发与触发注册
-  registry.py            注册表：QR_WORKFLOW 选择
+workflows/               命名空间包，无 __init__.py
+  registry.py            注册表：QR_WORKFLOW 选择；底部导入各 workflow 触发注册
   base.py                WorkflowResult / MessageContext / WorkflowContext
-  simple_agent/          案例 1：万能桌面助手（单文件包）
+  simple_agent/          案例 1：万能桌面助手（单模块）
+    workflow.py
   dev_review/            案例 2：研发流程审查
     workflow.py          LangGraph 图：节点、路由、构建
     prompts.py           意图/审核提示词、拒绝话术、审核类型表

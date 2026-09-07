@@ -22,8 +22,8 @@ from lark_oapi.api.im.v1.model.delete_message_reaction_request import (
     DeleteMessageReactionRequest,
 )
 
-from workflows import available, build_workflow
 from workflows.base import MessageContext, WorkflowContext, WorkflowResult
+from workflows.registry import available, build_workflow
 
 load_dotenv()  # 默认读当前目录 .env；已存在的环境变量优先，--env-file 用法不受影响
 

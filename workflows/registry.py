@@ -28,3 +28,8 @@ def build_workflow(ctx: WorkflowContext, name: str = "simple") -> Workflow:
     except KeyError:
         raise KeyError(f"未知 workflow {name!r}，可选：{'、'.join(available())}") from None
     return factory(ctx)
+
+
+# 底部导入以触发注册（workflows 为命名空间包，无 __init__.py）
+import workflows.dev_review.workflow  # noqa: E402,F401
+import workflows.simple_agent.workflow  # noqa: E402,F401

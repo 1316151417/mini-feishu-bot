@@ -206,10 +206,12 @@ class FeishuBot:
                 return
 
     def run(self) -> None:
-        # 表情回声事件无业务，注册空处理器避免 SDK 打 "processor not found" 错误日志
+        # 表情回声事件（贴上/撤掉受理表情的回执）无业务，注册空处理器避免 SDK 打 "processor not found"
         dispatcher = (lark.EventDispatcherHandler.builder("", "")
                       .register_p2_im_message_receive_v1(self.handle_event)
                       .register_p2_customized_event("im.message.reaction.created_v1",
+                                                    lambda data: None)
+                      .register_p2_customized_event("im.message.reaction.deleted_v1",
                                                     lambda data: None)
                       .build())
         lark.ws.Client(self.app_id, self.app_secret, event_handler=dispatcher,

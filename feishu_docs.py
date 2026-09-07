@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import lark_oapi as lark
 from lark_oapi.api.docx.v1.model.block import Block
@@ -180,9 +181,23 @@ def markdown_to_blocks(markdown: str) -> list[Block]:
     return blocks
 
 
+def link_domain_from(url: str) -> str | None:
+    """从飞书链接提取租户域名（如 https://xxx.feishu.cn），非飞书链接返回 None。"""
+    host = urlparse(url).netloc
+    return f"https://{host}" if host.endswith("feishu.cn") else None
+
+
 def create_report_doc(client: "lark.Client", title: str, markdown: str,
-                      *, folder_token: str | None = None) -> str:
-    """创建飞书文档并写入 markdown 报告，返回文档链接。"""
+                      *, folder_token: str | None = None,
+                      link_domain: str | None = None) -> str:
+    """创建飞书文档并写入 markdown 报告，返回文档链接。
+
+    folder_token：报告所在目录。不传时落在应用自己的云空间（默认仅应用可见，
+    建议配置指向共享目录，见 QR_REPORT_FOLDER_TOKEN）。
+    link_domain：拼链接用的租户域名，取值优先级 link_domain > QR_FEISHU_DOMAIN
+    > https://open.feishu.cn。open.feishu.cn 是开放平台 API 域名，未登录用户
+    打开会显示「页面不存在」，租户域名则会引导登录。
+    """
     body = CreateDocumentRequestBody.builder().title(title).build()
     if folder_token:
         body.folder_token = folder_token
@@ -203,7 +218,8 @@ def create_report_doc(client: "lark.Client", title: str, markdown: str,
         if not child_resp.success():
             raise RuntimeError(f"写入报告内容失败：{child_resp.msg}")
     _open_link_share(client, document_id)
-    domain = os.getenv("QR_FEISHU_DOMAIN", "https://open.feishu.cn").rstrip("/")
+    domain = (link_domain or os.getenv("QR_FEISHU_DOMAIN")
+              or "https://open.feishu.cn").rstrip("/")
     link = f"{domain}/docx/{document_id}"
     LOG.info("report doc created: %s (%d blocks)", link, len(blocks))
     return link

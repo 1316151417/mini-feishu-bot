@@ -186,9 +186,12 @@ class FeishuBot:
         if result.action == "reply_text":
             return result.text
         try:
+            # 用需求文档链接里的租户域名拼报告链接，未登录用户打开也能进登录页
+            domain = feishu_docs.link_domain_from(result.metadata.get("requirement_link", ""))
             link = feishu_docs.create_report_doc(
                 self.client, result.report_title, result.report_markdown,
-                folder_token=os.getenv("QR_REPORT_FOLDER_TOKEN") or None)
+                folder_token=os.getenv("QR_REPORT_FOLDER_TOKEN") or None,
+                link_domain=domain)
         except Exception:
             LOG.exception("创建报告文档失败，回退为全文回复")
             return result.report_markdown

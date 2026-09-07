@@ -22,6 +22,18 @@ class WorkflowResult:
 
 
 @dataclass
+class MessageContext:
+    """消息来源上下文（群绑定等项目路由用）；API 触发时可传 None。
+
+    on_accepted：受理通过（意图、项目、链接齐备）后的回调，适配层用它发即时回执。
+    """
+
+    chat_id: str = ""
+    chat_type: str = ""
+    on_accepted: Callable[[dict], None] | None = None
+
+
+@dataclass
 class WorkflowContext:
     """构建 workflow 时注入的外部依赖，测试中可整体替换。"""
 
@@ -29,10 +41,12 @@ class WorkflowContext:
     feishu_client: "lark.Client | None" = None
     workspace_root: str = "workspaces"
     projects_file: str = "projects.json"
-    doc_fetcher: Callable[[str], str] | None = None  # 需求文档拉取，默认走飞书 API
+    # 需求文档两个拉取动作，默认走飞书 API：元信息（标题+版本号）与正文
+    doc_meta: "Callable[[str], object] | None" = None
+    doc_content: "Callable[[str], str] | None" = None
 
 
-Workflow = Callable[[str], WorkflowResult]
+Workflow = Callable[[str, MessageContext | None], WorkflowResult]
 
 
 def final_answer(result: dict) -> str:

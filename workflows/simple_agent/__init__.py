@@ -8,7 +8,8 @@ from deepagents import create_deep_agent
 from deepagents.backends import LocalShellBackend
 
 from workflows import register
-from workflows.base import Workflow, WorkflowContext, WorkflowResult, final_answer
+from workflows.base import (MessageContext, Workflow, WorkflowContext, WorkflowResult,
+                            final_answer)
 
 
 @register("simple")
@@ -25,7 +26,7 @@ def build(ctx: WorkflowContext) -> Workflow:
         backend=LocalShellBackend(root_dir=str(home), timeout=30, inherit_env=True),
     )
 
-    def run(text: str) -> WorkflowResult:
+    def run(text: str, context: MessageContext | None = None) -> WorkflowResult:
         answer = final_answer(agent.invoke({"messages": [{"role": "user", "content": text}]},
                                            {"recursion_limit": 50}))
         return WorkflowResult(action="reply_text", text=answer)

@@ -1,9 +1,10 @@
-"""飞书文档 API 封装：拉取需求文档、创建审核报告文档。"""
+"""飞书文档 API 封装：拉取需求文档（含标题与版本号）、创建审核报告文档。"""
 from __future__ import annotations
 
 import logging
 import os
 import re
+from dataclasses import dataclass
 
 import lark_oapi as lark
 from lark_oapi.api.docx.v1.model.block import Block
@@ -17,6 +18,7 @@ from lark_oapi.api.docx.v1.model.create_document_request import CreateDocumentRe
 from lark_oapi.api.docx.v1.model.create_document_request_body import (
     CreateDocumentRequestBody,
 )
+from lark_oapi.api.docx.v1.model.get_document_request import GetDocumentRequest
 from lark_oapi.api.docx.v1.model.raw_content_document_request import (
     RawContentDocumentRequest,
 )
@@ -24,6 +26,10 @@ from lark_oapi.api.docx.v1.model.text import Text
 from lark_oapi.api.docx.v1.model.text_element import TextElement
 from lark_oapi.api.docx.v1.model.text_element_style import TextElementStyle
 from lark_oapi.api.docx.v1.model.text_run import TextRun
+from lark_oapi.api.drive.v1.model.patch_permission_public_request import (
+    PatchPermissionPublicRequest,
+)
+from lark_oapi.api.drive.v1.model.permission_public import PermissionPublic
 from lark_oapi.api.wiki.v2.model.get_node_space_request import GetNodeSpaceRequest
 
 LOG = logging.getLogger("quality-reviewer-lite")
@@ -53,10 +59,31 @@ def _document_id(client: "lark.Client", url: str) -> str:
     raise ValueError(f"不是可识别的飞书文档链接（仅支持 docx/wiki）：{url}")
 
 
-def fetch_doc_content(client: "lark.Client", url: str) -> str:
-    """拉取飞书文档纯文本内容。raw_content 不含表格、画板等结构。"""
+@dataclass
+class FeishuDoc:
+    """需求文档的定位信息；revision_id 用于本地按版本缓存。"""
+
+    document_id: str
+    title: str
+    revision_id: int
+
+
+def doc_meta(client: "lark.Client", url: str) -> FeishuDoc:
+    """解析链接并读取文档标题与版本号（不拉正文）。"""
+    document_id = _document_id(client, url)
+    resp = client.docx.v1.document.get(
+        GetDocumentRequest.builder().document_id(document_id).build())
+    if not resp.success() or not resp.data.document:
+        raise RuntimeError(f"读取文档信息失败：{resp.msg}")
+    document = resp.data.document
+    return FeishuDoc(document_id=document_id, title=document.title or document_id,
+                     revision_id=document.revision_id or 0)
+
+
+def fetch_doc_content(client: "lark.Client", document_id: str) -> str:
+    """按 document_id 拉取文档正文纯文本。raw_content 不含表格、画板等结构。"""
     resp = client.docx.v1.document.raw_content(
-        RawContentDocumentRequest.builder().document_id(_document_id(client, url)).lang(0).build())
+        RawContentDocumentRequest.builder().document_id(document_id).lang(0).build())
     if not resp.success():
         raise RuntimeError(f"接口返回失败：{resp.msg}")
     content = (resp.data.content if resp.data and resp.data.content else "").strip()
@@ -175,7 +202,28 @@ def create_report_doc(client: "lark.Client", title: str, markdown: str,
         child_resp = client.docx.v1.document_block_children.create(request)
         if not child_resp.success():
             raise RuntimeError(f"写入报告内容失败：{child_resp.msg}")
+    _open_link_share(client, document_id)
     domain = os.getenv("QR_FEISHU_DOMAIN", "https://open.feishu.cn").rstrip("/")
     link = f"{domain}/docx/{document_id}"
     LOG.info("report doc created: %s (%d blocks)", link, len(blocks))
     return link
+
+
+def _open_link_share(client: "lark.Client", document_id: str) -> None:
+    """把报告链接分享设为「组织内可阅读」；失败只记日志，不影响报告产出。
+
+    文档以应用身份创建，默认仅应用可见，不设置分享用户点开链接会无权限。
+    """
+    if os.getenv("QR_REPORT_LINK_SHARE", "tenant") == "off":
+        return
+    try:
+        resp = client.drive.v1.permission_public.patch(
+            PatchPermissionPublicRequest.builder()
+            .type("docx").token(document_id)
+            .request_body(PermissionPublic.builder()
+                          .link_share_entity("tenant_readable").build())
+            .build())
+        if not resp.success():
+            raise RuntimeError(resp.msg or f"code={resp.code}")
+    except Exception:
+        LOG.exception("设置报告链接分享失败，文档保持应用私有")

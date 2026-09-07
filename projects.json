@@ -1,9 +1,10 @@
 {
   "projects": [
     {
-      "name": "demo",
-      "aliases": ["演示项目"],
-      "code_repo": "",
+      "name": "mini-feishu-bot",
+      "aliases": ["最小飞书机器人"],
+      "chat_ids": ["oc_365d18efbc868f299108e6b62d0ee313"],
+      "code_repo": "https://github.com/1316151417/mini-feishu-bot.git",
       "know_base_repo": ""
     }
   ]

@@ -11,11 +11,21 @@ from typing import Any
 
 import feishu_docs
 import lark_oapi as lark
+from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from lark_oapi.api.im.v1 import P2ImMessageReceiveV1, ReplyMessageRequest, ReplyMessageRequestBody
+from lark_oapi.api.im.v1 import (CreateMessageReactionRequestBody, Emoji,
+                                 P2ImMessageReceiveV1, ReplyMessageRequest, ReplyMessageRequestBody)
+from lark_oapi.api.im.v1.model.create_message_reaction_request import (
+    CreateMessageReactionRequest,
+)
+from lark_oapi.api.im.v1.model.delete_message_reaction_request import (
+    DeleteMessageReactionRequest,
+)
 
 from workflows import available, build_workflow
-from workflows.base import WorkflowContext, WorkflowResult
+from workflows.base import MessageContext, WorkflowContext, WorkflowResult
+
+load_dotenv()  # 默认读当前目录 .env；已存在的环境变量优先，--env-file 用法不受影响
 
 LOG = logging.getLogger("quality-reviewer-lite")
 
@@ -49,13 +59,15 @@ class FeishuBot:
         self.client = lark.Client.builder().app_id(app_id).app_secret(app_secret).build()
         self.bot_open_id = self._bot_open_id()
         self.seen = RecentMessages()
+        self._acks: dict[str, str] = {}  # message_id -> 受理表情 reaction_id
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="assistant")
         model = ChatOpenAI(
             model=os.getenv("QR_MODEL_NAME", "GLM-5.3-Flash"),
             api_key=os.environ["ZHIPU_API_KEY"],
             base_url=zhipu_base_url(),
             temperature=0,
-            timeout=180,
+            timeout=300,
+            max_retries=1,
         )
         self.workflow = self._build_workflow(model)
 
@@ -115,16 +127,59 @@ class FeishuBot:
         text = self.accept(message, data.event.sender.sender_type)
         if text:
             LOG.info("submit message id=%s", message.message_id)
-            self.executor.submit(self._process, message.message_id, text)
+            self.executor.submit(self._process, message.message_id, text,
+                                 MessageContext(chat_id=message.chat_id or "",
+                                                chat_type=message.chat_type or "",
+                                                on_accepted=lambda meta, mid=message.message_id:
+                                                 self.ack_accepted(mid, meta)))
 
-    def _process(self, message_id: str, text: str) -> None:
+    def ack_accepted(self, message_id: str, meta: dict) -> None:
+        """受理回执：优先给原消息贴「敲键盘」表情，失败则退回文本回复。"""
         try:
-            result = self.workflow(text)
+            self._acks[message_id] = self.add_reaction(message_id, "Typing")
+        except Exception:
+            LOG.exception("添加表情回应失败，退回文本回执")
+            self.reply(message_id, f"✅ 已受理，开始审核 {meta.get('project', '')} 的需求，预计需要几分钟")
+
+    def withdraw_ack(self, message_id: str) -> None:
+        """回复完成后撤掉「敲键盘」，让表情只在处理期间存在。"""
+        reaction_id = self._acks.pop(message_id, None)
+        if not reaction_id:
+            return
+        try:
+            self.delete_reaction(message_id, reaction_id)
+        except Exception:
+            LOG.warning("撤回受理表情失败 message=%s reaction=%s", message_id, reaction_id)
+
+    def add_reaction(self, message_id: str, emoji_type: str) -> str:
+        request = (CreateMessageReactionRequest.builder()
+                   .message_id(message_id)
+                   .request_body(CreateMessageReactionRequestBody.builder()
+                                 .reaction_type(Emoji.builder().emoji_type(emoji_type).build())
+                                 .build())
+                   .build())
+        response = self.client.im.v1.message_reaction.create(request)
+        if not response.success():
+            raise RuntimeError(f"add reaction failed: {response.msg}")
+        return response.data.reaction_id or ""
+
+    def delete_reaction(self, message_id: str, reaction_id: str) -> None:
+        request = (DeleteMessageReactionRequest.builder()
+                   .message_id(message_id).reaction_id(reaction_id).build())
+        response = self.client.im.v1.message_reaction.delete(request)
+        if not response.success():
+            raise RuntimeError(f"delete reaction failed: {response.msg}")
+
+    def _process(self, message_id: str, text: str,
+                 context: MessageContext | None = None) -> None:
+        try:
+            result = self.workflow(text, context)
             answer = self.deliver(result)
         except Exception as exc:
             LOG.exception("workflow failed for message id=%s", message_id)
             answer = f"处理时出现问题：{type(exc).__name__}。请稍后再试。"
         self.reply(message_id, answer)
+        self.withdraw_ack(message_id)
 
     def deliver(self, result: WorkflowResult) -> str:
         """结果投递：审核报告创建飞书文档回复链接，其余直接回复文本。"""
@@ -151,9 +206,12 @@ class FeishuBot:
                 return
 
     def run(self) -> None:
-        dispatcher = lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(
-            self.handle_event
-        ).build()
+        # 表情回声事件无业务，注册空处理器避免 SDK 打 "processor not found" 错误日志
+        dispatcher = (lark.EventDispatcherHandler.builder("", "")
+                      .register_p2_im_message_receive_v1(self.handle_event)
+                      .register_p2_customized_event("im.message.reaction.created_v1",
+                                                    lambda data: None)
+                      .build())
         lark.ws.Client(self.app_id, self.app_secret, event_handler=dispatcher,
                        log_level=lark.LogLevel.INFO).start()
 

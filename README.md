@@ -1,11 +1,14 @@
 # mini-feishu-bot
 
-极简飞书机器人：**WebSocket 长连接**收发消息，零公网 IP、零回调，任何能上网的机器都能跑；背后接**可插拔的 LangGraph 工作流**。核心链路只有两个文件（`main.py` 飞书收发 + `workflows/simple_agent/` 助手），其余都是可选工作流。
+**极简**飞书机器人 + **可插拔** LangGraph 工作流。
 
-| `QR_WORKFLOW` | workflow | 案例 |
-| --- | --- | --- |
-| `simple`（默认） | SimpleAgentWorkflow | **万能桌面助手** |
-| `dev_review` | DevProcessReviewWorkflow | **研发流程审查** |
+- **极简**：核心链路只有两个文件——`main.py`（WebSocket 长连接收发，197 行）+ `simple_agent/workflow.py`（桌面助手，27 行），去除空行与注释合计 224 行。零公网 IP、零回调、零数据库，能上网就能跑。
+- **可插拔**：`.env` 里改一个 `QR_WORKFLOW` key，即可切换整条工作流：
+
+| `QR_WORKFLOW` | 案例 |
+| --- | --- |
+| `simple`（默认） | **万能桌面助手**：deepagents 执行 shell / 读写文件，消息进、答案出 |
+| `dev_review` | **研发流程审查**：意图识别 → 备料 → deep agent 审核 → 飞书文档报告 |
 
 ## 快速开始
 
@@ -33,7 +36,7 @@ uv run pytest             # 测试
 
 ## 案例 1：万能桌面助手（simple）
 
-deepagents 单 agent，自带 shell 执行与文件读写工具，消息进、答案出：
+deepagents 单 agent，自带 shell 执行与文件读写工具：
 
 > 「看看我的桌面有哪些文件」「把 ~/Downloads 里今天的截图列出来」
 
@@ -69,7 +72,7 @@ write_result ──> 创建飞书文档报告，回复链接
 
 ## 新增一个 workflow
 
-`workflows/` 下建同名包，`__init__.py` 里实现 `build(ctx)` 并 `@register("your_key")`，把包导入加到 `workflows/__init__.py` 底部。提示词/状态/图逻辑分文件放（参考 `dev_review/`）；投递由 `main.py` 适配层统一处理，workflow 不感知飞书。
+`workflows/` 下建同名包，实现写在包内 `workflow.py`（`build(ctx)` + `@register("your_key")`），`__init__.py` 只转发 `build`，并把包导入加到 `workflows/__init__.py` 底部。提示词/状态/图逻辑分文件放（参考 `dev_review/`）；投递由 `main.py` 适配层统一处理，workflow 不感知飞书。
 
 ## 配置
 
@@ -83,7 +86,7 @@ write_result ──> 创建飞书文档报告，回复链接
 | `QR_REPORT_FOLDER_TOKEN` | 空 | 报告文档存放目录（默认云空间根） |
 | `QR_REPORT_LINK_SHARE` | `tenant` | 报告链接分享：`tenant` 组织内可阅读 / `off` 应用私有 |
 | `QR_FEISHU_DOMAIN` | `https://open.feishu.cn` | 拼报告链接用 |
-| `QR_SIMPLE_ROOT` | 用户主目录 | simple 的工具根目录（收窄权限） |
+| `QR_SIMPLE_ROOT` | 用户主目录 | simple 的工具根目录 |
 
 ## 部署
 
@@ -106,19 +109,19 @@ WantedBy=multi-user.target
 
 更新：`git pull && uv sync && sudo systemctl restart mini-feishu-bot`。
 
-## ⚠️ 安全须知
-
-Agent 可在宿主机执行任意 shell 命令并继承环境变量——任何能给机器人发消息的飞书用户都等同于在你机器上执行命令。只部署在可控、可牺牲的环境，用专用低权限用户运行，不要暴露生产密钥。`dev_review` 的 agent 限定在审核工作区内，`simple` 默认主目录（`QR_SIMPLE_ROOT` 收窄）。
-
 ## 项目结构
 
 ```
 main.py                  飞书收发 + 结果投递（文本 / 报告链接 / 受理表情）
 workflows/
-  __init__.py            注册表：QR_WORKFLOW 选择
+  __init__.py            只转发与触发注册
+  registry.py            注册表：QR_WORKFLOW 选择
   base.py                WorkflowResult / MessageContext / WorkflowContext
   simple_agent/          案例 1：万能桌面助手（单文件包）
-  dev_review/            案例 2：研发流程审查（prompts / state / 图）
+  dev_review/            案例 2：研发流程审查
+    workflow.py          LangGraph 图：节点、路由、构建
+    prompts.py           意图/审核提示词、拒绝话术、审核类型表
+    state.py             图状态 ReviewState 与意图 schema Intent
 feishu_docs.py           飞书文档 API：需求拉取、报告创建、链接分享
 projects.json            项目注册表
 tests/                   pytest

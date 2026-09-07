@@ -1,0 +1,10 @@
+{
+  "projects": [
+    {
+      "name": "demo",
+      "aliases": ["演示项目"],
+      "code_repo": "",
+      "know_base_repo": ""
+    }
+  ]
+}

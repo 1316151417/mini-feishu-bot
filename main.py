@@ -1,4 +1,4 @@
-"""单进程飞书长连接：收消息、后台执行工作流、回复原消息。"""
+"""单进程飞书长连接：收消息、后台执行 workflow、按结果类型投递。"""
 from __future__ import annotations
 
 import json
@@ -9,11 +9,13 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+import feishu_docs
 import lark_oapi as lark
 from langchain_openai import ChatOpenAI
 from lark_oapi.api.im.v1 import P2ImMessageReceiveV1, ReplyMessageRequest, ReplyMessageRequestBody
 
-from workflow import build_workflow
+from workflows import available, build_workflow
+from workflows.base import WorkflowContext, WorkflowResult
 
 LOG = logging.getLogger("quality-reviewer-lite")
 
@@ -55,7 +57,18 @@ class FeishuBot:
             temperature=0,
             timeout=180,
         )
-        self.workflow = build_workflow(model)
+        self.workflow = self._build_workflow(model)
+
+    def _build_workflow(self, model):
+        ctx = WorkflowContext(
+            model=model,
+            feishu_client=self.client,
+            workspace_root=os.getenv("QR_WORKSPACE_ROOT", "workspaces"),
+            projects_file=os.getenv("QR_PROJECTS_FILE", "projects.json"),
+        )
+        name = os.getenv("QR_WORKFLOW", "simple")
+        LOG.info("workflow=%s (available: %s)", name, ", ".join(available()))
+        return build_workflow(ctx, name)
 
     def _bot_open_id(self) -> str:
         """SDK 未封装 bot/v3/info 的类型化接口，借通用请求复用客户端的鉴权与 token 缓存。"""
@@ -106,11 +119,25 @@ class FeishuBot:
 
     def _process(self, message_id: str, text: str) -> None:
         try:
-            answer = self.workflow(text)
+            result = self.workflow(text)
+            answer = self.deliver(result)
         except Exception as exc:
-            LOG.exception("agent failed for message id=%s", message_id)
+            LOG.exception("workflow failed for message id=%s", message_id)
             answer = f"处理时出现问题：{type(exc).__name__}。请稍后再试。"
         self.reply(message_id, answer)
+
+    def deliver(self, result: WorkflowResult) -> str:
+        """结果投递：审核报告创建飞书文档回复链接，其余直接回复文本。"""
+        if result.action == "reply_text":
+            return result.text
+        try:
+            link = feishu_docs.create_report_doc(
+                self.client, result.report_title, result.report_markdown,
+                folder_token=os.getenv("QR_REPORT_FOLDER_TOKEN") or None)
+        except Exception:
+            LOG.exception("创建报告文档失败，回退为全文回复")
+            return result.report_markdown
+        return f"✅ {result.report_title}\n报告：{link}"
 
     def reply(self, message_id: str, text: str) -> None:
         for index in range(0, len(text), 3000):
